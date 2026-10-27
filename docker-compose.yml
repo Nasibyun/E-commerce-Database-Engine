@@ -1,0 +1,89 @@
+services:
+  db:
+    image: postgres:16
+    container_name: ecommerce_dba_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ecommerce_dba}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      # Note: 02-setup-replication.sh is NOT mounted here on purpose.
+      # Init scripts only run once, when the data directory is empty —
+      # since this container already has data, mounting it wouldn't do
+      # anything retroactively. See REPLICATION.md for the manual
+      # one-time commands to enable replication on an existing primary.
+      # (Anyone spinning this project up completely fresh CAN add that
+      # mount back in before their first `docker compose up`.)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ecommerce_dba}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # Tune shared_buffers and work_mem for optimization testing
+    command: >
+      postgres
+        -c shared_buffers=256MB
+        -c work_mem=4MB
+        -c maintenance_work_mem=128MB
+        -c effective_cache_size=512MB
+        -c wal_level=replica
+        -c max_wal_senders=3
+        -c max_replication_slots=3
+        -c log_min_duration_statement=500
+        -c log_statement=ddl
+
+  replica:
+    image: postgres:16
+    container_name: ecommerce_dba_replica
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PRIMARY_HOST: db
+      REPLICATION_USER: ${REPLICATION_USER:-replicator}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-replicator_pw}
+    ports:
+      - "${REPLICA_PORT:-5433}:5432"
+    volumes:
+      - pgdata_replica:/var/lib/postgresql/data
+      - ./replica-entrypoint.sh:/replica-entrypoint.sh
+    entrypoint: ["bash", "/replica-entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # Optional: pgAdmin web UI for visual database management
+  # Access at http://localhost:8080
+  # Login with PGADMIN_EMAIL / PGADMIN_PASSWORD from .env
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ecommerce_dba_pgadmin
+    restart: unless-stopped
+    profiles:
+      - tools    # Only starts with: docker compose --profile tools up -d
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@ecommerce.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "${PGADMIN_PORT:-8080}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+volumes:
+  pgdata:
+  pgdata_replica:
+  pgadmin_data:

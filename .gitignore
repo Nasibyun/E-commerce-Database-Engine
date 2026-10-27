@@ -1,0 +1,10 @@
+.env
+pgdata/
+pgdata_replica/
+__pycache__/
+*.pyc
+*.pyo
+*.dump
+*.bak
+.DS_Store
+Thumbs.db
